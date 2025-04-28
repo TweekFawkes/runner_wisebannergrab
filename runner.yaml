@@ -1,0 +1,21 @@
+runner:
+  name: Wise Banner Grabber
+  description: Grab banners from a remote server.
+  version: 0.0.1
+
+build:
+  commands: |
+    echo "START: Building the runner"
+    python3 -m pip install -U -r requirements.txt
+    echo "END: Building the runner"
+
+webform:
+  - name: ip_address
+    prompt: IP Address
+    type: text
+  - name: tcp_port
+    prompt: TCP Port
+    type: text
+
+launch:
+  command: app.py --ip_address ${ip_address} --tcp_port ${tcp_port}
