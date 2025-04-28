@@ -1,2 +1,4 @@
 hrequests
 hrequests[all]
+camoufox
+camoufox[geoip]

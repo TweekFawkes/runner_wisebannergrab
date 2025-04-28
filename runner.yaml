@@ -6,7 +6,12 @@ runner:
 build:
   commands: |
     echo "START: Building the runner"
+    apt update
+    apt install -y libgtk-3-0
+    apt install -y libasound2
+    apt install -y libx11-xcb1
     python3 -m pip install -U -r requirements.txt
+    python3 -m camoufox fetch
     echo "END: Building the runner"
 
 webform:

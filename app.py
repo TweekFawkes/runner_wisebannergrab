@@ -6,13 +6,25 @@ try:
     import socket
     import ssl
     import hrequests
+    from hrequests import BrowserSession # Import BrowserSession
 except ImportError:
     print("Please install requirements.txt first: pip install -r requirements.txt")
     exit(1)
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
+def create_browser_session(session):
+    if session is None:
+        # Create a BrowserSession instance
+        print("[*] Initializing hrequests BrowserSession (camoufox)...")
+        session = BrowserSession(browser='firefox', mock_human=True, os='lin')
+        print("[*] BrowserSession initialized.")
+    return session
+
+### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
+
 def main():
+    session = None # Initialize session to None
     try:
         parser = argparse.ArgumentParser()
         parser.add_argument('--ip_address', required=True, help='IP Address to Get Whois Information For')
@@ -21,6 +33,8 @@ def main():
 
         ip_address = args.ip_address
         tcp_port = int(args.tcp_port) # Convert port to integer
+
+
 
         ### --- Port Check Logic Start --- ###
         print(f"\n# Attempting to connect to {ip_address}:{tcp_port}...")
@@ -73,8 +87,10 @@ def main():
                     original_sock.close() # Close the potentially corrupted original socket
                 except: pass
                 try:
-                    # Use hrequests for the HTTPS GET request, disable SSL verification
-                    response = hrequests.get(f'https://{ip_address}:{tcp_port}', verify=False, timeout=10)
+                    # Use the session for the HTTPS GET request
+                    session = create_browser_session(session)
+                    # Add verify=False to ignore SSL certificate errors
+                    response = session.get(f'https://{ip_address}:{tcp_port}', verify=False)
                     print("--- hrequests HTTPS Response Details (after SNI error) ---")
                     # (Identical printing logic as the successful handshake case)
                     print(f"Status Code: {response.status_code} ({response.reason})")
@@ -104,10 +120,13 @@ def main():
                     error_message = str(e)
                     print(f"[!] hrequests HTTPS GET request failed (after SNI error): {error_message}")
                     # Check if the specific TLS unrecognized name error occurred during the hrequests HTTPS attempt
-                    if "remote error: tls: unrecognized name" in error_message:
+                    if "remote error: tls: unrecognized name" in error_message or "tlsv1 unrecognized name" in error_message:
                         print("[*] HTTPS GET failed with TLS unrecognized name, falling back to HTTP GET...")
                         try:
-                            response = hrequests.get(f'http://{ip_address}:{tcp_port}', timeout=10)
+                            # Use the session for the HTTP GET request
+                            session = create_browser_session(session)
+                            # No verify=False needed for HTTP
+                            response = session.get(f'http://{ip_address}:{tcp_port}')
                             print("--- hrequests HTTP Response Details (Fallback after SNI->HTTPS fail) ---")
                             print(f"Status Code: {response.status_code} ({response.reason})")
                             print(f"OK: {response.ok}")
@@ -160,11 +179,12 @@ def main():
                             print(f"## Received Banner:\n{banner.decode(errors='ignore')}")
                         else:
                             print("[-] No banner received immediately. Assuming HTTP or similar service requiring client initiation.")
-                            # Try HTTP GET request with hrequests since no banner was received
+                            # Try HTTP GET request with the session since no banner was received
                             try:
-                                print(f"[*] Attempting HTTP GET request with hrequests to http://{ip_address}:{tcp_port}")
-                                # Use hrequests for the GET request
-                                response = hrequests.get(f'http://{ip_address}:{tcp_port}', timeout=10)
+                                session = create_browser_session(session)
+                                print(f"[*] Attempting HTTP GET request with hrequests session to http://{ip_address}:{tcp_port}")
+                                # Use the session for the GET request
+                                response = session.get(f'http://{ip_address}:{tcp_port}')
 
                                 print("--- hrequests Response Details ---")
                                 print(f"Status Code: {response.status_code} ({response.reason})")
@@ -196,10 +216,11 @@ def main():
 
                     except socket.timeout:
                         print("[-] Timed out waiting for banner. Assuming HTTP or similar service requiring client request.")
-                        # Also try HTTP GET request with hrequests here if banner times out
+                        # Also try HTTP GET request with the session here if banner times out
                         try:
-                            print(f"[*] Attempting HTTP GET request with hrequests to http://{ip_address}:{tcp_port} after banner timeout")
-                            response = hrequests.get(f'http://{ip_address}:{tcp_port}', timeout=10)
+                            session = create_browser_session(session)
+                            print(f"[*] Attempting HTTP GET request with hrequests session to http://{ip_address}:{tcp_port} after banner timeout")
+                            response = session.get(f'http://{ip_address}:{tcp_port}')
 
                             print("--- hrequests Response Details ---")
                             print(f"Status Code: {response.status_code} ({response.reason})")
@@ -241,10 +262,12 @@ def main():
             # Case 3: TLS handshake succeeded initially
             elif expects_tls:
                 # Original socket is closed by sslsock.close() after successful handshake
-                print("[*] TLS expected. Attempting HTTPS GET request with hrequests...")
+                print("[*] TLS expected. Attempting HTTPS GET request with hrequests session...")
                 try:
-                    # Use hrequests for the HTTPS GET request, disable SSL verification
-                    response = hrequests.get(f'https://{ip_address}:{tcp_port}', verify=False, timeout=10)
+                    session = create_browser_session(session)
+                    # Use the session for the HTTPS GET request
+                    # Add verify=False to ignore SSL certificate errors
+                    response = session.get(f'https://{ip_address}:{tcp_port}', verify=False)
 
                     print("--- hrequests HTTPS Response Details ---")
                     print(f"Status Code: {response.status_code} ({response.reason})")
@@ -269,7 +292,7 @@ def main():
                         print("  (No redirects)")
                     print("Content (first 500 bytes):")
                     print(response.content[:500].decode(errors='ignore'))
-                    print("------------------------------------")
+                    print("---------------------------------")
 
                 except Exception as e: # Catch general exception for hrequests call
                     print(f"[!] hrequests HTTPS GET request failed: {e}")
@@ -309,6 +332,15 @@ def main():
     except Exception as e:
         print(f"[!] Error: {str(e)}")
         return 1
+    finally:
+        # Ensure the browser session is closed if it was created
+        if session:
+            print("[*] Closing hrequests BrowserSession...")
+            try:
+                session.close()
+                print("[*] BrowserSession closed.")
+            except Exception as e:
+                print(f"[!] Error closing BrowserSession: {e}")
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
