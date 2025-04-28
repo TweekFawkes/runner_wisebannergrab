@@ -4,6 +4,7 @@ runner:
   version: 0.0.1
 
 build:
+  memorysize: 1280
   commands: |
     echo "START: Building the runner"
     apt update
