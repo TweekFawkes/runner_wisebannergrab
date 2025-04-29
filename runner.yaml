@@ -4,16 +4,9 @@ runner:
   version: 0.0.1
 
 build:
-  memorysize: 1280
   commands: |
     echo "START: Building the runner"
-    apt update
-    apt install -y libgtk-3-0
-    apt install -y libasound2
-    apt install -y libx11-xcb1
     python3 -m pip install -U -r requirements.txt
-    python3 -m camoufox fetch
-    python3 app.py --ip_address 34.209.82.230 --tcp_port 22
     echo "END: Building the runner"
 
 webform:
