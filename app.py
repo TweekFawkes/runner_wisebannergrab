@@ -5,6 +5,10 @@ import sys # Import sys for exit
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
+user_agent = "CCBot/2.0"
+
+### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
+
 try:
     # Removed hrequests imports
     from curl_cffi import requests as curl_requests # Use requests submodule for convenience
@@ -74,9 +78,9 @@ def main():
                 try:
                     http_get = f"GET / HTTP/1.1
 Host: {ip_address}
-Connection: close
-User-Agent: CCBot/2.0
+User-Agent: {user_agent}
 Accept: */*
+Connection: close
 
 ".encode('utf-8')
                     print("[*] Sending HTTP GET request...")
@@ -87,7 +91,7 @@ Accept: */*
                     # Receive response
                     print("[*] Waiting for HTTP response...")
                     response = b""
-                    sock.settimeout(5) # Timeout for response
+                    sock.settimeout(10) # Timeout for response
                     while True:
                         try:
                             chunk = sock.recv(4096)
@@ -105,7 +109,11 @@ Accept: */*
                     if response:
                         print(f"[+] Received HTTP Response ({len(response)} bytes):")
                         try:
-                            print(response.decode('utf-8', errors='replace')) # Try decoding as UTF-8
+                            decoded_response = response.decode('utf-8', errors='replace')
+                            if len(decoded_response) > 10000:
+                                print(f"## Received Response (truncated to 10000 chars):\n{decoded_response[:10000]}...")
+                            else:
+                                print(f"## Received Response:\n{decoded_response}")
                         except Exception as decode_err:
                             print(f"[!] Error decoding response: {decode_err}")
                             print(f"Raw Response (repr): {repr(response)}")
