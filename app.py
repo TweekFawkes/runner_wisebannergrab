@@ -76,16 +76,16 @@ def main():
             if not banner_received:
                 print(f"# C. No banner received, attempting manual HTTP GET to {ip_address}:{tcp_port}...")
                 try:
-                    http_get = f"GET / HTTP/1.1
-Host: {ip_address}
-User-Agent: {user_agent}
-Accept: */*
-Connection: close
-
-".encode('utf-8')
+                    http_get = f"""GET / HTTP/1.1\r
+Host: {ip_address}\r
+User-Agent: {user_agent}\r
+Accept: */*\r
+Connection: close\r
+\r
+""".encode('utf-8')
                     print("[*] Sending HTTP GET request...")
                     # print(f"--- Request ---
-{http_get.decode('utf-8')}--- End Request ---") # Optional: print request
+# {http_get.decode('utf-8')}--- End Request ---") # Optional: print request
                     sock.sendall(http_get)
 
                     # Receive response
@@ -146,7 +146,7 @@ Connection: close
                 sock = None # Ensure sock is None after closing
 
         # --- Step D: TLS Check (if initial connection succeeded) ---
-        if initial_connection_succeeded:
+        if initial_connection_succeeded and not banner_received:
             print(f"# D. Performing TLS handshake check on {ip_address}:{tcp_port}...")
             sock_tls = None
             try:
@@ -189,10 +189,12 @@ Connection: close
                         sock_tls.close()
                      except socket.error as e:
                         print(f"[!] Error closing temporary TLS socket: {e}")
+        elif initial_connection_succeeded and banner_received:
+             print("[*] Skipping TLS check because a banner was received in Step B.")
 
 
         # --- Step E/F: curl_cffi Request (if initial connection succeeded) ---
-        if initial_connection_succeeded:
+        if initial_connection_succeeded and not banner_received:
             target_url = ""
             protocol = ""
 
@@ -248,9 +250,9 @@ Connection: close
                         print(f"  {i+1}: {resp_hist.status_code} -> {resp_hist.url}")
                 else:
                     print("  (No redirects)")
-                print(f"Content (first 500 bytes of {len(response.content)} total):")
+                print(f"## Content (first 10000 bytes of {len(response.content)} total):")
                 # Use response.text which handles decoding based on headers/chardet
-                print(response.text[:500])
+                print(response.text[:10000])
                 # Or force decode if needed: print(response.content[:500].decode(response.encoding or 'utf-8', errors='ignore'))
                 print("---------------------------------")
 
@@ -258,7 +260,9 @@ Connection: close
                 print(f"[!] curl_cffi request failed: {e}")
             except Exception as e:
                 print(f"[!] Unexpected error during curl_cffi request: {e}")
-        else:
+        elif initial_connection_succeeded and banner_received:
+             print("[*] Skipping curl_cffi request because a banner was received in Step B.")
+        else: # This handles the case where initial_connection_succeeded is False
             print("[*] Skipping TLS check and curl_cffi request because initial connection failed.")
 
 
