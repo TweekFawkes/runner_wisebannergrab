@@ -5,45 +5,59 @@ Q. will you explain the logic flow of the @app.py now, as it relates to what it 
 A. Okay, let's break down the logic flow of `app.py` step-by-step:
 
 1.  **Initialization and Argument Parsing:**
-    *   The script imports necessary libraries (`socket`, `ssl`, `hrequests`, `argparse`).
+    *   The script imports necessary libraries (`argparse`, `socket`, `ssl`, `sys`, `curl_cffi.requests`).
     *   It defines the `main` function.
-    *   Inside `main`, it parses command-line arguments to get the target `--ip_address` and `--tcp_port`.
+    *   Inside `main`, it parses command-line arguments using `argparse` to get the target `--ip_address` and `--tcp_port`.
 
-2.  **Initial TCP Connection Attempt:**
-    *   It tries to establish a basic TCP connection to the specified IP and port using `socket.create_connection` with a 5-second timeout.
-    *   **If connection fails (timeout or error):** It prints an error message indicating the failure and jumps to the `finally` block for cleanup.
-    *   **If connection succeeds:** It prints that the port appears open and proceeds to the next step.
+2.  **Step A: Initial TCP Connection Attempt:**
+    *   It attempts to establish a basic TCP connection to the specified IP and port using `socket.create_connection` with a 5-second timeout.
+    *   A flag `initial_connection_succeeded` tracks the outcome.
+    *   **If connection fails (timeout or error):** It prints an error message, sets the flag to `False`, ensures the socket (if partially opened) is closed, and skips ahead to the *end* of the checks (Step E/F are skipped).
+    *   **If connection succeeds:** It prints a success message, sets the flag to `True`, and proceeds to the next step.
 
-3.  **TLS Handshake Check:**
-    *   It takes the established socket (`original_sock`) and attempts to wrap it with SSL/TLS using `context.wrap_socket`.
-    *   It tries to perform a TLS handshake (`sslsock.do_handshake()`) with a 3-second timeout.
-    *   There are several possible outcomes here:
-        *   **TLS Handshake Success:** The server completed the TLS handshake. The script notes this (`expects_tls = True`), prints a success message, closes the SSL socket (`sslsock`, which also closes `original_sock`), and prepares to make an HTTPS request.
-        *   **TLS Handshake Failure (SNI Error):** The handshake fails specifically because the server didn't recognize the name (often happens when using an IP address directly). The script notes this (`try_https_despite_sni_error = True`), prints the specific error, explicitly closes the original socket (as it might be in a weird state), and prepares to *still try* an HTTPS request using `hrequests` (since some servers might respond despite the SNI issue).
-        *   **TLS Handshake Failure (Other Error or Timeout):** The handshake fails for reasons other than SNI, or it times out. The script notes this (`tls_check_failed = True`), prints the error, and prepares to treat the service as non-TLS (e.g., plain HTTP). It will close the original socket later before attempting a new connection.
+3.  **Step B: Banner Grabbing (Only if Step A succeeded):**
+    *   It attempts to receive initial data (a "banner") from the server using the established socket (`sock.recv(1024)`) with a short 3-second timeout.
+    *   A flag `banner_received` tracks the outcome.
+    *   **If banner received:** It prints the decoded banner (UTF-8 with replacements for errors) and sets `banner_received = True`.
+    *   **If no banner (timeout, socket error, connection closed prematurely):** It prints a relevant message and sets `banner_received = False`.
 
-4.  **Service Interaction (Based on TLS Check Outcome):**
-    *   **Scenario A: If TLS Handshake Succeeded (`expects_tls` is True):**
-        *   It attempts an HTTPS GET request to `https://{ip_address}:{tcp_port}` using `hrequests`, disabling SSL certificate verification (`verify=False`).
-        *   It prints the details of the `hrequests` response (status code, headers, content snippet, etc.) or any error encountered during the request.
-    *   **Scenario B: If TLS Handshake Failed with SNI Error (`try_https_despite_sni_error` is True):**
-        *   It *first* attempts an HTTPS GET request to `https://{ip_address}:{tcp_port}` using `hrequests` (like in Scenario A).
-        *   If this HTTPS request succeeds, it prints the response details.
-        *   If this HTTPS request *fails*, and the error specifically mentions "unrecognized name" again (indicating the server *really* doesn't like the IP for HTTPS), it *then* falls back and attempts a plain HTTP GET request to `http://{ip_address}:{tcp_port}` using `hrequests`. It prints the HTTP response details or any fallback error.
-        *   If the initial HTTPS request fails for a *different* reason, it just prints that error and doesn't attempt the HTTP fallback.
-    *   **Scenario C: If TLS Handshake Failed Generally (`tls_check_failed` is True):**
-        *   It explicitly closes the `original_sock` used for the failed TLS attempt.
-        *   It attempts to establish a *new*, plain TCP connection (`socket.create_connection`).
-        *   If the reconnection fails, it prints an error.
-        *   If the reconnection succeeds:
-            *   It tries to receive a banner (initial data sent by the server like SSH version) using `sock.recv(1024)` with a 3-second timeout.
-            *   If a banner *is* received, it's decoded and printed.
-            *   If no banner is received (or it times out), it assumes the service requires a client request (like HTTP). It then attempts an HTTP GET request to `http://{ip_address}:{tcp_port}` using `hrequests`. It prints the response details or any error.
+4.  **Step C: Manual HTTP GET (Only if Step A succeeded AND Step B failed):**
+    *   If no banner was received in Step B, the script assumes the service might be HTTP-based and requires a client request first.
+    *   It constructs a basic `GET / HTTP/1.1` request string, including `Host`, `Connection: close`, and `User-Agent` headers.
+    *   It sends this request using `sock.sendall()`.
+    *   It then attempts to receive the response in chunks (`sock.recv(4096)`) with a 5-second timeout until the connection is closed or times out.
+    *   A flag `http_response_received` tracks the outcome.
+    *   **If response received:** It prints the decoded response (UTF-8 with replacements) and sets `http_response_received = True`.
+    *   **If no response or error during send/receive:** It prints a relevant message and sets `http_response_received = False`.
 
-5.  **Cleanup:**
-    *   The `finally` block executes regardless of success or failure within the `try` block.
-    *   It checks which socket reference might still exist (`sock` from a reconnection or `original_sock` if the initial connection failed early) and attempts to close it cleanly. This prevents resource leaks.
+5.  **Cleanup After Initial Connection Steps (A, B, C):**
+    *   A `finally` block associated with the initial connection attempt ensures that the socket (`sock`) used for steps A, B, and C is always closed cleanly, regardless of success or failure within those steps.
 
-6.  **Final Output:**
-    *   The script prints "### --- Port Check Logic End --- ###".
-    *   The `main` function returns 0 on success or 1 on error. The script exits with this code.
+6.  **Step D: TLS Handshake Check (Only if Step A succeeded):**
+    *   This step runs *regardless* of whether a banner or HTTP response was received, as long as the *initial* connection (Step A) worked.
+    *   It establishes a ***new***, separate TCP connection to the target IP and port (timeout 5s) specifically for the TLS check.
+    *   It creates a default SSL context (`ssl.create_default_context()`).
+    *   Crucially, it disables strict certificate validation (`context.check_hostname = False` and `context.verify_mode = ssl.CERT_NONE`) to allow connections to servers using IP addresses or self-signed certificates without immediate failure.
+    *   It attempts to wrap the new socket with TLS using `context.wrap_socket()`, providing the `ip_address` as `server_hostname` (for SNI). This is done within a `with` statement, which handles the TLS handshake implicitly and socket closure on success. A 5-second timeout is set on the wrapped socket for the handshake.
+    *   A flag `expects_tls` tracks the outcome.
+    *   **If handshake succeeds:** It prints a success message and sets `expects_tls = True`. The `with` statement automatically closes the TLS socket.
+    *   **If handshake fails (`ssl.SSLError`, `socket.timeout`, `socket.error`, etc.):** It prints the specific error, sets `expects_tls = False`, and a `finally` block ensures the underlying temporary socket (`sock_tls`) is closed (since the `with` statement might not have completed successfully).
+
+7.  **Step E/F: `curl_cffi` Request (Only if Step A succeeded):**
+    *   This step uses the `curl_cffi` library (impersonating Chrome 110) to make a final HTTP or HTTPS request based on the result of the TLS check (Step D).
+    *   **Scenario E (if `expects_tls` is True):**
+        *   Sets `protocol = "https"` and constructs the `target_url` (e.g., `https://{ip_address}:{tcp_port}/` or `https://{ip_address}/` if port is 443).
+        *   Prints a message indicating an HTTPS attempt.
+        *   Makes a GET request using `curl_requests.get(target_url, impersonate="chrome110", timeout=15, verify=False)`. **Note:** `verify=False` explicitly disables SSL certificate verification for this request.
+    *   **Scenario F (if `expects_tls` is False):**
+        *   Sets `protocol = "http"` and constructs the `target_url` (e.g., `http://{ip_address}:{tcp_port}/` or `http://{ip_address}/` if port is 80).
+        *   Prints a message indicating an HTTP attempt.
+        *   Makes a GET request using `curl_requests.get(target_url, impersonate="chrome110", timeout=15, verify=False)`. (`verify=False` has no effect on HTTP but is set unconditionally in the code).
+    *   **Request Outcome (Either Scenario):**
+        *   **If `curl_requests.get` succeeds:** It prints detailed response information: status code, reason phrase, final URL (after redirects), headers, elapsed time, redirect history, and the first 500 bytes of the response body (`response.text`).
+        *   **If `curl_requests.get` fails (e.g., `curl_requests.errors.CurlError`, network issues):** It prints an error message indicating the failure.
+
+8.  **Final Output and Exit:**
+    *   The script prints "### --- Check Complete --- ###".
+    *   The `main` function returns `0` if the script generally completed its flow, or `1` if specific errors like DNS resolution failure (`socket.gaierror`) or other unexpected exceptions occurred.
+    *   The script exits using `sys.exit()` with the return code from `main()`. A top-level `try...except ImportError` handles cases where `curl_cffi` isn't installed.

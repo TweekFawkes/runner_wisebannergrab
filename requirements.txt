@@ -1,4 +1,1 @@
-hrequests
-hrequests[all]
-camoufox
-camoufox[geoip]
+curl_cffi>=0.6.0

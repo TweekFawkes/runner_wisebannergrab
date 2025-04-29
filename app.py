@@ -1,348 +1,273 @@
 import argparse
+import socket
+import ssl
+import sys # Import sys for exit
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
 try:
-    import socket
-    import ssl
-    import hrequests
-    from hrequests import BrowserSession # Import BrowserSession
+    # Removed hrequests imports
+    from curl_cffi import requests as curl_requests # Use requests submodule for convenience
 except ImportError:
-    print("Please install requirements.txt first: pip install -r requirements.txt")
-    exit(1)
+    print("Please install requirements first: pip install -r requirements.txt")
+    sys.exit(1) # Use sys.exit
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
-def create_browser_session(session):
-    if session is None:
-        # Create a BrowserSession instance
-        print("[*] Initializing hrequests BrowserSession (camoufox)...")
-        session = BrowserSession(browser='firefox', mock_human=True, os='lin')
-        print("[*] BrowserSession initialized.")
-    return session
+# Removed create_browser_session function
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
 def main():
-    session = None # Initialize session to None
+    # Removed session variable
+    banner_received = False
+    http_response_received = False
+    expects_tls = False
+    initial_connection_succeeded = False # Track if initial connection works
+
     try:
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--ip_address', required=True, help='IP Address to Get Whois Information For')
-        parser.add_argument('--tcp_port', required=True, help='TCP Port to Check')
+        parser = argparse.ArgumentParser(description="Check TCP port, attempt banner grab/HTTP GET, check TLS, and perform curl_cffi request.")
+        parser.add_argument('--ip_address', required=True, help='Target IP Address')
+        parser.add_argument('--tcp_port', required=True, type=int, help='Target TCP Port') # Directly use type=int
         args = parser.parse_args()
 
         ip_address = args.ip_address
-        tcp_port = int(args.tcp_port) # Convert port to integer
+        tcp_port = args.tcp_port # Already an int
 
-
-
-        ### --- Port Check Logic Start --- ###
-        print(f"\n# Attempting to connect to {ip_address}:{tcp_port}...")
+        # --- Step A: Initial TCP Connection ---
+        print(f"# A. Attempting initial connection to {ip_address}:{tcp_port}...")
         sock = None
         try:
-            # Initial TCP connection
             sock = socket.create_connection((ip_address, tcp_port), timeout=5)
-            print(f"[+] Port {tcp_port} appears to be open. Checking for TLS...")
+            print(f"[+] Initial connection to {ip_address}:{tcp_port} successful.")
+            initial_connection_succeeded = True
 
-            # --- TLS Handshake Check --- #
-            expects_tls = False
-            tls_check_failed = False # Flag to indicate if we need to reconnect for plain HTTP
-            try_https_despite_sni_error = False # Flag for specific SNI error case
-            original_sock = sock # Keep a reference to the original socket
-            sslsock = None
+            # --- Step B: Banner Grabbing ---
+            print(f"# B. Attempting to receive banner from {ip_address}:{tcp_port}...")
+            sock.settimeout(3) # Short timeout for banner grab
             try:
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                sslsock = context.wrap_socket(original_sock, server_hostname=ip_address, do_handshake_on_connect=False)
-                sslsock.settimeout(3)
-                sslsock.do_handshake()
-                print("[+] TLS handshake successful. Service likely expects TLS (e.g., HTTPS).")
-                expects_tls = True
-                try:
-                    sslsock.close() # Close the SSL socket, underlying original_sock is also closed
-                except: pass
-
-            except ssl.SSLError as e:
-                # Check for the specific SNI error
-                if "TLSV1_UNRECOGNIZED_NAME" in str(e) or "tlsv1 unrecognized name" in str(e):
-                    print(f"[-] TLS handshake failed with SNI error: {e}. Server expects TLS but may dislike IP address.")
-                    try_https_despite_sni_error = True
-                else:
-                    # Handshake failed for other reasons, likely not a TLS service
-                    print(f"[-] TLS handshake failed: {e}. Service likely expects a plain protocol (e.g., HTTP).")
-                    tls_check_failed = True # Mark for plain HTTP fallback
-            except socket.timeout:
-                print("[-] Timed out during TLS handshake attempt.")
-                tls_check_failed = True # Mark for plain HTTP fallback
-            except Exception as e:
-                print(f"[!] Error during TLS check: {e}")
-                tls_check_failed = True # Mark for plain HTTP fallback
-            # --- End TLS Handshake Check --- #
-
-            # Case 1: SNI error occurred, but we still want to try HTTPS GET
-            if try_https_despite_sni_error:
-                print("[*] Closing socket after SNI error, attempting HTTPS GET with hrequests...")
-                try:
-                    original_sock.close() # Close the potentially corrupted original socket
-                except: pass
-                try:
-                    # Use the session for the HTTPS GET request
-                    session = create_browser_session(session)
-                    # Add verify=False to ignore SSL certificate errors
-                    response = session.get(f'https://{ip_address}:{tcp_port}', verify=False)
-                    print("--- hrequests HTTPS Response Details (after SNI error) ---")
-                    # (Identical printing logic as the successful handshake case)
-                    print(f"Status Code: {response.status_code} ({response.reason})")
-                    print(f"OK: {response.ok}")
-                    print(f"URL: {response.url}")
-                    print(f"Encoding: {response.encoding}")
-                    print(f"Elapsed Time: {response.elapsed}")
-                    print("Headers:")
-                    for key, value in response.headers.items():
-                        print(f"  {key}: {value}")
-                    print("Cookies:")
-                    if response.cookies:
-                        for cookie in response.cookies:
-                            print(f"  {cookie.name}={cookie.value}")
-                    else:
-                        print("  (No cookies received)")
-                    print("History (Redirects):")
-                    if response.history:
-                        for resp_hist in response.history:
-                            print(f"  {resp_hist.status_code} -> {resp_hist.url}")
-                    else:
-                        print("  (No redirects)")
-                    print("Content (first 500 bytes):")
-                    print(response.content[:500].decode(errors='ignore'))
-                    print("---------------------------------------------------------")
-                except Exception as e: # Catch general exception for hrequests call
-                    error_message = str(e)
-                    print(f"[!] hrequests HTTPS GET request failed (after SNI error): {error_message}")
-                    # Check if the specific TLS unrecognized name error occurred during the hrequests HTTPS attempt
-                    if "remote error: tls: unrecognized name" in error_message or "tlsv1 unrecognized name" in error_message:
-                        print("[*] HTTPS GET failed with TLS unrecognized name, falling back to HTTP GET...")
-                        try:
-                            # Use the session for the HTTP GET request
-                            session = create_browser_session(session)
-                            # No verify=False needed for HTTP
-                            response = session.get(f'http://{ip_address}:{tcp_port}')
-                            print("--- hrequests HTTP Response Details (Fallback after SNI->HTTPS fail) ---")
-                            print(f"Status Code: {response.status_code} ({response.reason})")
-                            print(f"OK: {response.ok}")
-                            print(f"URL: {response.url}")
-                            print(f"Encoding: {response.encoding}")
-                            print(f"Elapsed Time: {response.elapsed}")
-                            print("Headers:")
-                            for key, value in response.headers.items():
-                                print(f"  {key}: {value}")
-                            print("Cookies:")
-                            if response.cookies:
-                                for cookie in response.cookies:
-                                    print(f"  {cookie.name}={cookie.value}")
-                            else:
-                                print("  (No cookies received)")
-                            print("History (Redirects):")
-                            if response.history:
-                                for resp_hist in response.history:
-                                    print(f"  {resp_hist.status_code} -> {resp_hist.url}")
-                            else:
-                                print("  (No redirects)")
-                            print("Content (first 500 bytes):")
-                            print(response.content[:500].decode(errors='ignore'))
-                            print("----------------------------------------------------------------------")
-                        except Exception as fallback_e:
-                            print(f"[!] HTTP GET fallback failed: {fallback_e}")
-                    # else: The HTTPS GET failed for a different reason, no further fallback.
-
-            # Case 2: TLS handshake failed for other reasons, reconnect and try plain HTTP
-            elif tls_check_failed:
-                print("[*] Closing potentially corrupted socket after failed TLS attempt...")
-                try:
-                    # Close the original socket explicitly, as TLS attempt might have corrupted it
-                    original_sock.close()
-                except: pass # Ignore errors if already closed
-
-                print("[*] Reconnecting with a plain socket...")
-                sock = None # Reset sock before trying to reconnect
-                try:
-                    # Create a *new* plain connection
-                    sock = socket.create_connection((ip_address, tcp_port), timeout=5)
-                    print("[+] Reconnected successfully.")
-
-                    # Now proceed with non-TLS banner grab / request using the *new* sock
-                    print("[*] Proceeding with non-TLS banner grab / request...")
-                    sock.settimeout(3)
+                banner = sock.recv(1024)
+                if banner:
+                    print(f"[+] Received Banner ({len(banner)} bytes):")
                     try:
-                        banner = sock.recv(1024)
-                        if banner:
-                            print(f"## Received Banner:\n{banner.decode(errors='ignore')}")
-                        else:
-                            print("[-] No banner received immediately. Assuming HTTP or similar service requiring client initiation.")
-                            # Try HTTP GET request with the session since no banner was received
-                            try:
-                                session = create_browser_session(session)
-                                print(f"[*] Attempting HTTP GET request with hrequests session to http://{ip_address}:{tcp_port}")
-                                # Use the session for the GET request
-                                response = session.get(f'http://{ip_address}:{tcp_port}')
+                        print(banner.decode('utf-8', errors='replace')) # Try decoding as UTF-8
+                    except Exception as decode_err:
+                         print(f"[!] Error decoding banner: {decode_err}")
+                         print(f"Raw Banner (repr): {repr(banner)}")
+                    banner_received = True
+                else:
+                    print("[-] Connection closed by remote host before banner received.")
+                    banner_received = False # Explicitly false
+            except socket.timeout:
+                print("[-] Timed out waiting for banner.")
+                banner_received = False
+            except socket.error as e:
+                print(f"[!] Socket error during banner receive: {e}")
+                banner_received = False
+            except Exception as e:
+                print(f"[!] Unexpected error during banner receive: {e}")
+                banner_received = False
 
-                                print("--- hrequests Response Details ---")
-                                print(f"Status Code: {response.status_code} ({response.reason})")
-                                print(f"OK: {response.ok}")
-                                print(f"URL: {response.url}")
-                                print(f"Encoding: {response.encoding}")
-                                print(f"Elapsed Time: {response.elapsed}")
-                                print("Headers:")
-                                for key, value in response.headers.items():
-                                    print(f"  {key}: {value}")
-                                print("Cookies:")
-                                if response.cookies:
-                                    for cookie in response.cookies:
-                                        print(f"  {cookie.name}={cookie.value}")
-                                else:
-                                    print("  (No cookies received)")
-                                print("History (Redirects):")
-                                if response.history:
-                                    for resp_hist in response.history:
-                                        print(f"  {resp_hist.status_code} -> {resp_hist.url}")
-                                else:
-                                    print("  (No redirects)")
-                                print("Content (first 500 bytes):")
-                                print(response.content[:500].decode(errors='ignore'))
-                                print("---------------------------------")
-
-                            except Exception as e: # Catch general exception for hrequests call
-                                print(f"[!] hrequests GET request failed: {e}")
-
-                    except socket.timeout:
-                        print("[-] Timed out waiting for banner. Assuming HTTP or similar service requiring client request.")
-                        # Also try HTTP GET request with the session here if banner times out
-                        try:
-                            session = create_browser_session(session)
-                            print(f"[*] Attempting HTTP GET request with hrequests session to http://{ip_address}:{tcp_port} after banner timeout")
-                            response = session.get(f'http://{ip_address}:{tcp_port}')
-
-                            print("--- hrequests Response Details ---")
-                            print(f"Status Code: {response.status_code} ({response.reason})")
-                            print(f"OK: {response.ok}")
-                            print(f"URL: {response.url}")
-                            print(f"Encoding: {response.encoding}")
-                            print(f"Elapsed Time: {response.elapsed}")
-                            print("Headers:")
-                            for key, value in response.headers.items():
-                                print(f"  {key}: {value}")
-                            print("Cookies:")
-                            if response.cookies:
-                                for cookie in response.cookies:
-                                    print(f"  {cookie.name}={cookie.value}")
-                            else:
-                                print("  (No cookies received)")
-                            print("History (Redirects):")
-                            if response.history:
-                                for resp_hist in response.history:
-                                    print(f"  {resp_hist.status_code} -> {resp_hist.url}")
-                            else:
-                                print("  (No redirects)")
-                            print("Content (first 500 bytes):")
-                            print(response.content[:500].decode(errors='ignore'))
-                            print("---------------------------------")
-                        except Exception as e: # Catch general exception for hrequests call
-                            print(f"[!] hrequests GET request failed after banner timeout: {e}")
-
-                    except Exception as e:
-                        # Catch other socket errors during banner grab
-                        print(f"[!] Error during banner grab attempt: {e}")
-
-                except socket.timeout:
-                    print(f"[-] Reconnection attempt to {ip_address}:{tcp_port} timed out.")
-                except socket.error as e:
-                    print(f"[-] Could not reconnect to {ip_address}:{tcp_port}. Error: {e}")
-                # The finally block below will handle closing this new sock if it exists
-
-            # Case 3: TLS handshake succeeded initially
-            elif expects_tls:
-                # Original socket is closed by sslsock.close() after successful handshake
-                print("[*] TLS expected. Attempting HTTPS GET request with hrequests session...")
+            # --- Step C: Manual HTTP GET (if no banner) ---
+            if not banner_received:
+                print(f"# C. No banner received, attempting manual HTTP GET to {ip_address}:{tcp_port}...")
                 try:
-                    session = create_browser_session(session)
-                    # Use the session for the HTTPS GET request
-                    # Add verify=False to ignore SSL certificate errors
-                    response = session.get(f'https://{ip_address}:{tcp_port}', verify=False)
+                    http_get = f"GET / HTTP/1.1
+Host: {ip_address}
+Connection: close
+User-Agent: CCBot/2.0
+Accept: */*
 
-                    print("--- hrequests HTTPS Response Details ---")
-                    print(f"Status Code: {response.status_code} ({response.reason})")
-                    print(f"OK: {response.ok}")
-                    print(f"URL: {response.url}")
-                    print(f"Encoding: {response.encoding}")
-                    print(f"Elapsed Time: {response.elapsed}")
-                    print("Headers:")
-                    for key, value in response.headers.items():
-                        print(f"  {key}: {value}")
-                    print("Cookies:")
-                    if response.cookies:
-                        for cookie in response.cookies:
-                            print(f"  {cookie.name}={cookie.value}")
+".encode('utf-8')
+                    print("[*] Sending HTTP GET request...")
+                    # print(f"--- Request ---
+{http_get.decode('utf-8')}--- End Request ---") # Optional: print request
+                    sock.sendall(http_get)
+
+                    # Receive response
+                    print("[*] Waiting for HTTP response...")
+                    response = b""
+                    sock.settimeout(5) # Timeout for response
+                    while True:
+                        try:
+                            chunk = sock.recv(4096)
+                            if not chunk:
+                                print("[-] Connection closed by remote host.")
+                                break
+                            response += chunk
+                        except socket.timeout:
+                            print("[-] Timed out waiting for more data.")
+                            break
+                        except socket.error as e:
+                            print(f"[!] Socket error during HTTP response receive: {e}")
+                            break
+
+                    if response:
+                        print(f"[+] Received HTTP Response ({len(response)} bytes):")
+                        try:
+                            print(response.decode('utf-8', errors='replace')) # Try decoding as UTF-8
+                        except Exception as decode_err:
+                            print(f"[!] Error decoding response: {decode_err}")
+                            print(f"Raw Response (repr): {repr(response)}")
+                        http_response_received = True
                     else:
-                        print("  (No cookies received)")
-                    print("History (Redirects):")
-                    if response.history:
-                        for resp_hist in response.history:
-                            print(f"  {resp_hist.status_code} -> {resp_hist.url}")
-                    else:
-                        print("  (No redirects)")
-                    print("Content (first 500 bytes):")
-                    print(response.content[:500].decode(errors='ignore'))
-                    print("---------------------------------")
+                        print("[-] No response received after manual HTTP GET.")
+                        http_response_received = False
 
-                except Exception as e: # Catch general exception for hrequests call
-                    print(f"[!] hrequests HTTPS GET request failed: {e}")
-
-            # Else: Initial connection might have failed even before TLS check, handled by outer exception blocks.
+                except socket.error as e:
+                    print(f"[!] Socket error during manual HTTP GET send/recv: {e}")
+                except Exception as e:
+                    print(f"[!] Unexpected error during manual HTTP GET: {e}")
 
         except socket.timeout:
-            print(f"[-] Connection to {ip_address}:{tcp_port} timed out (initial connection)." )
+            print(f"[-] Initial connection to {ip_address}:{tcp_port} timed out.")
+            initial_connection_succeeded = False
         except socket.error as e:
-            # This catches connection errors for the *initial* connection attempt
-            print(f"[-] Could not connect to {ip_address}:{tcp_port} (initial attempt). Error: {e}")
+            print(f"[-] Could not connect to {ip_address}:{tcp_port} (Initial). Error: {e}")
+            initial_connection_succeeded = False
+        except Exception as e:
+             print(f"[!] Unexpected error during initial connection or steps B/C: {e}")
+             initial_connection_succeeded = False
         finally:
-            # Ensure the *final* socket (original, reconnected, or none if HTTPS tried after SNI) is closed if it exists
-            if 'sock' in locals() and sock and not try_https_despite_sni_error and not expects_tls:
-                # Only close 'sock' if it's the reconnected one for plain HTTP
+            if sock:
+                print("[*] Closing initial socket.")
                 try:
-                    #print("[Debug] Closing reconnected plain socket in outer finally.")
                     sock.close()
-                except: pass
-            elif 'original_sock' in locals() and original_sock and (expects_tls or try_https_despite_sni_error):
-                 # If TLS succeeded, original_sock was closed by sslsock.close().
-                 # If TLS failed with SNI error, original_sock was closed before hrequests HTTPS attempt.
-                 # No action needed here.
-                 pass
-            # Add a check in case initial connection failed before sock was assigned
-            elif 'sock' not in locals() and 'original_sock' in locals() and original_sock:
-                 try:
-                      #print("[Debug] Closing original_sock because main logic wasn't reached")
-                      original_sock.close()
-                 except: pass
+                except socket.error as e:
+                    print(f"[!] Error closing initial socket: {e}")
+                sock = None # Ensure sock is None after closing
 
-        print("### --- Port Check Logic End --- ###\n")
-        ###
-        return 0
-    except socket.gaierror as e:
-        print(f"[!] Error resolving IP address or connecting: {e}")
-    except Exception as e:
-        print(f"[!] Error: {str(e)}")
-        return 1
-    finally:
-        # Ensure the browser session is closed if it was created
-        if session:
-            print("[*] Closing hrequests BrowserSession...")
+        # --- Step D: TLS Check (if initial connection succeeded) ---
+        if initial_connection_succeeded:
+            print(f"# D. Performing TLS handshake check on {ip_address}:{tcp_port}...")
+            sock_tls = None
             try:
-                session.close()
-                print("[*] BrowserSession closed.")
+                # Establish a *new* connection for the TLS check
+                sock_tls = socket.create_connection((ip_address, tcp_port), timeout=5)
+                print("[*] Established temporary connection for TLS check.")
+                context = ssl.create_default_context()
+                # Loosen checks for self-signed certs / IP address usage
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                print("[*] Attempting TLS handshake...")
+                # Use server_hostname=ip_address for SNI, though check_hostname=False ignores mismatch later
+                with context.wrap_socket(sock_tls, server_hostname=ip_address) as sslsock:
+                    sslsock.settimeout(5) # Handshake timeout
+                    # Handshake happens implicitly here with context manager in newer Python versions
+                    # For older versions, you might need sslsock.do_handshake() explicitly before this line
+                    # cert = sslsock.getpeercert() # Optional: Get cert info
+                    # print(f"[+] TLS Handshake Successful. Cipher: {sslsock.cipher()}") # Optional: Print cipher
+                    # if cert:
+                    #    print(f"[+] Peer Certificate: {cert}")
+                    print("[+] TLS handshake successful. Service likely expects TLS (e.g., HTTPS).")
+                    expects_tls = True
+
+            except ssl.SSLError as e:
+                print(f"[-] TLS handshake failed: {e}. Service likely expects a plain protocol (e.g., HTTP).")
+                expects_tls = False
+            except socket.timeout:
+                print(f"[-] Timed out during TLS check connection or handshake.")
+                expects_tls = False # Assume no TLS if timeout occurs here
+            except socket.error as e:
+                print(f"[-] Socket error during TLS check connection: {e}")
+                expects_tls = False # Assume no TLS if connection fails
             except Exception as e:
-                print(f"[!] Error closing BrowserSession: {e}")
+                print(f"[!] Unexpected error during TLS check: {e}")
+                expects_tls = False
+            finally:
+                if sock_tls and not expects_tls: # wrap_socket closes the underlying socket on success when used as context manager
+                     print("[*] Closing temporary socket for TLS check (handshake failed or context manager exited).")
+                     try:
+                        sock_tls.close()
+                     except socket.error as e:
+                        print(f"[!] Error closing temporary TLS socket: {e}")
+
+
+        # --- Step E/F: curl_cffi Request (if initial connection succeeded) ---
+        if initial_connection_succeeded:
+            target_url = ""
+            protocol = ""
+
+            if expects_tls:
+                # --- Step E: HTTPS Request ---
+                protocol = "https"
+                if tcp_port == 443:
+                    target_url = f"https://{ip_address}/"
+                else:
+                    target_url = f"https://{ip_address}:{tcp_port}/"
+                print(f"# E. Service expects TLS. Attempting HTTPS GET request to {target_url} using curl_cffi...")
+
+            else:
+                # --- Step F: HTTP Request ---
+                protocol = "http"
+                if tcp_port == 80:
+                    target_url = f"http://{ip_address}/"
+                else:
+                    target_url = f"http://{ip_address}:{tcp_port}/"
+                print(f"# F. Service does not expect TLS (or check failed). Attempting HTTP GET request to {target_url} using curl_cffi...")
+
+            try:
+                # Use verify=False for HTTPS to ignore certificate verification errors
+                # (common when accessing via IP or using self-signed certs)
+                print(f"[*] Making {protocol.upper()} request with impersonation (chrome)...")
+                response = curl_requests.get(
+                    target_url,
+                    impersonate="chrome110", # Use a specific recent version
+                    # proxies=proxies, # Example: Add proxies if needed
+                    timeout=15, # Request timeout
+                    verify=False # Disable SSL verification
+                    #verify=False if protocol == "https" else True # Only set verify=False for HTTPS
+                )
+                print(f"[+] curl_cffi {protocol.upper()} request successful.")
+                print("--- curl_cffi Response Details ---")
+                print(f"Status Code: {response.status_code} ({response.reason})")
+                print(f"OK: {response.ok}")
+                print(f"URL (final): {response.url}")
+                print(f"Encoding: {response.encoding}")
+                print(f"Elapsed Time: {response.elapsed}")
+                print("Headers:")
+                for key, value in response.headers.items():
+                    print(f"  {key}: {value}")
+                # print("Cookies:") # curl_cffi response object might not expose cookies directly like requests
+                # if response.cookies:
+                #     for cookie in response.cookies:
+                #         print(f"  {cookie.name}={cookie.value}")
+                # else:
+                #      print("  (No cookies received or not accessible)")
+                print("History (Redirects):")
+                if response.history:
+                    for i, resp_hist in enumerate(response.history):
+                        print(f"  {i+1}: {resp_hist.status_code} -> {resp_hist.url}")
+                else:
+                    print("  (No redirects)")
+                print(f"Content (first 500 bytes of {len(response.content)} total):")
+                # Use response.text which handles decoding based on headers/chardet
+                print(response.text[:500])
+                # Or force decode if needed: print(response.content[:500].decode(response.encoding or 'utf-8', errors='ignore'))
+                print("---------------------------------")
+
+            except curl_requests.errors.CurlError as e:
+                print(f"[!] curl_cffi request failed: {e}")
+            except Exception as e:
+                print(f"[!] Unexpected error during curl_cffi request: {e}")
+        else:
+            print("[*] Skipping TLS check and curl_cffi request because initial connection failed.")
+
+
+        print("### --- Check Complete --- ###")
+        return 0 # Indicate success if script ran through
+
+    except socket.gaierror as e:
+        print(f"[!] Error resolving IP address '{args.ip_address}': {e}")
+        return 1
+    except Exception as e:
+        print(f"[!] An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc() # Print detailed traceback for debugging
+        return 1
+    # Removed finally block that closed hrequests session
 
 ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ### --- ###
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main()) # Use sys.exit for cleaner exit code handling
